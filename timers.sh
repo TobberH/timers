@@ -6,7 +6,7 @@ set -euo pipefail
 file="${1:-$(dirname "$0")/timers.json}"
 
 if ! command -v jq >/dev/null; then
-    echo "This script needs jq. Install it with: sudo apt install jq  (or: brew install jq)" >&2
+    echo "This script needs jq. Install it with: sudo apt install jq  (Arch: sudo pacman -S jq, macOS: brew install jq)" >&2
     exit 1
 fi
 if [[ ! -f "$file" ]]; then
