@@ -29,7 +29,7 @@ Everything lives in a single PHP file with no database and no dependencies. Time
 Clone the repository and start PHP's built-in web server in the project folder:
 
 ```bash
-git clone https://github.com/<you>/timers.git
+git clone https://github.com/TobberH/timers.git
 cd timers
 php -S localhost:8000
 ```
