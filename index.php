@@ -310,7 +310,7 @@ $version = file_exists($file) ? md5_file($file) : 'none';
         </div>
     </dialog>
 
-    <div id="timer-list" data-version="<?= e($version) ?>">
+    <div id="timer-list" data-version="<?= e($version) ?>" data-server-time="<?= round(microtime(true) * 1000) ?>">
     <?php if (!$timers): ?>
         <p class="empty">No timers yet. Add one above to start counting down.</p>
     <?php else: ?>
@@ -346,7 +346,10 @@ $version = file_exists($file) ? md5_file($file) : 'none';
 
 <script>
 // Use the server's clock so countdowns are correct even if this device's clock is off
-const offset = <?= time() ?> * 1000 - Date.now();
+// Difference between the server's clock and this device's clock, in ms.
+// Re-measured regularly, because this device's clock can change while the page is open
+// (waking from sleep, a reboot, a time sync), which would otherwise shift every countdown.
+let offset = <?= round(microtime(true) * 1000) ?> - Date.now();
 const pad = n => String(n).padStart(2, '0');
 
 function format(totalSeconds) {
@@ -369,7 +372,23 @@ let firstTick = true;
 // so it survives the list being refreshed from the server
 const notified = new Set();
 
+// Detect this device's clock jumping: compare wall-clock time with a steady timer
+let lastWall = Date.now();
+let lastSteady = performance.now();
+let clockJumped = false; // pause countdowns until the server confirms the time
+let syncing = false;
+
 function tick() {
+    const wall = Date.now(), steady = performance.now();
+    const drift = (wall - lastWall) - (steady - lastSteady);
+    lastWall = wall; lastSteady = steady;
+    if (Math.abs(drift) > 5000) { // clock jumped or device slept
+        clockJumped = true;
+        syncWithServer();
+    }
+    // Don't show (or notify on) countdowns based on a clock we no longer trust
+    if (clockJumped) return;
+
     const now = Date.now() + offset;
     document.querySelectorAll('.timer').forEach(el => {
         const end = Number(el.dataset.end) * 1000;
@@ -521,25 +540,45 @@ document.addEventListener('click', event => {
 
 // Check the server once a minute for timers added, restarted or deleted elsewhere.
 // Only the list is swapped, so anything you're typing in the add form is kept.
-async function refreshList() {
-    const list = document.getElementById('timer-list');
-    // Don't pull the rug out while someone is confirming a delete
-    if (list.querySelector('.armed')) return;
+// Check the server: re-measure the clock difference every time, and refresh the
+// timer list when it changed (timers added, restarted or deleted elsewhere).
+// Only the list is swapped, so anything you're typing in the add form is kept.
+
+async function syncWithServer() {
+    if (syncing) return;
+    syncing = true;
     try {
+        const sent = Date.now();
         const res = await fetch(location.pathname, { cache: 'no-store' });
+        const html = await res.text();
+        const received = Date.now();
         if (!res.ok) return;
-        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-        const fresh = doc.getElementById('timer-list');
-        if (!fresh || fresh.dataset.version === list.dataset.version) return;
-        if (list.querySelector('.armed')) return;
-        list.replaceWith(document.importNode(fresh, true));
-        tick();
+        const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('timer-list');
+        if (!fresh) return;
+
+        // Server time was taken roughly halfway through the request
+        const serverTime = Number(fresh.dataset.serverTime);
+        if (serverTime) offset = serverTime - (sent + received) / 2;
+
+        const list = document.getElementById('timer-list');
+        // Don't replace the list while someone is confirming a delete
+        if (fresh.dataset.version !== list.dataset.version && !list.querySelector('.armed')) {
+            list.replaceWith(document.importNode(fresh, true));
+        }
     } catch (err) {
         // Server unreachable for a moment; try again next minute
+    } finally {
+        syncing = false;
+        clockJumped = false; // if the server couldn't be reached, carry on as before
+        tick();
     }
 }
 
-setInterval(refreshList, 60000);
+setInterval(syncWithServer, 60000);
+// Coming back to the tab (e.g. after the computer slept): check right away
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncWithServer();
+});
 </script>
 </body>
 </html>
